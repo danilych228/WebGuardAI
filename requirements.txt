@@ -1,0 +1,9 @@
+pyyaml
+typing_extensions
+requests
+curl_cffi
+g4f==7.1.2
+pyfiglet>=1.0.4
+colorama
+fpdf2
+PyQt6
