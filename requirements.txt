@@ -7,3 +7,5 @@ pyfiglet>=1.0.4
 colorama
 fpdf2
 PyQt6
+python-docx
+docx2pdf

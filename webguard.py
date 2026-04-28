@@ -20,7 +20,6 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
-from fpdf import FPDF
 from typing import List, Dict, Tuple, Optional
 
 # Initialize colorama
@@ -146,20 +145,54 @@ class AIScanner:
         """Анализирует код на уязвимости"""
         try:
             import g4f
-            
-            prompt = f"""Проанализируй следующий код на предмет уязвимостей безопасности.
-Верни результат в формате JSON с массивом объектов, каждый содержит:
-- severity: "High", "Medium" или "Low"
-- type: тип уязвимости
-- description: описание проблемы
-- recommendation: рекомендация по исправлению
 
-Код из файла {file_path}:
-```
-{code_content[:2000]}
-```
+            prompt = f"""
+                    ### РОЛЬ
+                    Действуй как Старший инженер по безопасности приложений (Senior Application Security Engineer) и Аудитор кода. Твоя задача — провести глубокий статический анализ предоставленного исходного кода для выявления уязвимостей безопасности, логических ошибок и небезопасных практик программирования.
 
-Верни только JSON без дополнительного текста."""
+                    ### КОНТЕКСТ
+                    Файл: {file_path}
+                    Язык: Определи исходя из содержимого кода.
+
+                    ### РУКОВОДСТВО ПО АНАЛИЗУ
+                    1. **Отслеживание потока данных (Data Flow Tracking):** Отслеживай пользовательские входные данные (источники) до чувствительных операций (стоки). Не просто ищи ключевые слова; проверяй, действительно ли санитизация или валидация эффективны.
+                    2. **Область угроз:** Ищи уязвимости OWASP Top 10 (SQLi, XSS, RCE, SSRF, IDOR), но ТАКЖЕ проверяй:
+                       - Захардкоженные секреты (API-ключи, пароли, токены).
+                       - Раскрытие информации (подробные сообщения об ошибках, стек трейсы).
+                       - Небезопасные конфигурации (режим отладки включен, слабый CORS).
+                       - Логические ошибки (состояния гонки, обходимые проверки).
+                       - Устаревшие или небезопасные функции/библиотеки.
+                    3. **Скрытые дефекты:** Обращай внимание на неочевидные уязвимости (oversights), такие как отсутствие проверки длины ввода, неправильное приведение типов или потенциальные уязвимости при расширении кода.
+
+                    МАКСИМАЛЬНО ИЩИ КИБЕР УГРОЗЫ В КОДЕ!!!!!!!
+
+                    ### УРОВНИ СЕРЬЕЗНОСТИ
+                    - **Высокая:** Эксплуатируемо напрямую без сложных условий (например, незаэкранированный SQL-запрос, удаленное выполнение кода, обход аутентификации).
+                    - **Средняя:** Эксплуатируемо при определенных условиях или требует взаимодействия пользователя (например, stored XSS, CSRF без токена, небезопасные прямые ссылки на объекты).
+                    - **Незначительная:** Нарушения лучших практик, мелкие утечки информации или теоретические риски с низким воздействием (например, отсутствующие заголовки безопасности, подробное логирование несensitive данных).
+
+                    ### ФОРМАТ ВЫВОДА
+                    Верни результат **ТОЛЬКО** в виде валидного JSON-списка объектов. Не включай markdown-форматирование (как ```json), объяснения или текст вне JSON.
+                    Если угроз не найдено, верни пустой список [].
+
+                    МАКСИМАЛЬНО ИЩИ КИБЕР УГРОЗЫ В КОДЕ!!!!!!!
+
+                    Каждый объект должен строго следовать этой схеме:
+                    {{
+                      "type": "Конкретное название уязвимости (например, SQL Injection, Hardcoded Secret)",
+                      "severity": "High" | "Medium" | "Low",
+                      "description": "Подробное объяснение, ПОЧЕМУ это ошибка, со ссылками на конкретные переменные или логику строк.",
+                      "recommendation": "Конкретное исправление на уровне кода или рекомендация библиотеки."
+                    }}
+
+                    !!! Максимально подробно расписывай рекомендации. Текста должно быть много! Вставляй ссылки на документации по исправлению именно этой ошибки.
+
+                    ВАЖНО: Все текстовые значения внутри JSON (поля type, description, recommendation) должны быть написаны на РУССКОМ языке. Значения поля severity оставь на английском (High, Medium, Low).
+
+                    МАКСИМАЛЬНО ИЩИ КИБЕР УГРОЗЫ В КОДЕ!!!!!!!
+                    ### КОД ДЛЯ АНАЛИЗА
+                    {code_content}
+                """
             
             response = await g4f.ChatCompletion.create_async(
                 model=g4f.models.gpt_4,
@@ -185,64 +218,141 @@ class AIScanner:
 
 
 # ============================================================================
-# REPORT GENERATOR MODULE
+# REPORT GENERATOR MODULE (python-docx + docx2pdf)
 # ============================================================================
 
 class ReportGenerator:
-    """Генератор отчетов"""
+    """Генератор отчетов на базе python-docx + docx2pdf"""
     
     def __init__(self):
-        self.pdf = FPDF()
-        self.pdf.set_auto_page_break(auto=True, margin=15)
+        pass
+    
+    def _add_styled_paragraph(self, doc, text: str, style_name: str = 'Normal', bold: bool = False, 
+                              italic: bool = False, color: str = None, align: str = None):
+        """Вспомогательный метод для добавления стилизованного параграфа"""
+        from docx.shared import RGBColor
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        
+        p = doc.add_paragraph(text, style=style_name)
+        run = p.runs[0]
+        if bold:
+            run.bold = True
+        if italic:
+            run.italic = True
+        if color:
+            run.font.color.rgb = RGBColor.from_string(color)
+        if align:
+            p.alignment = {
+                'center': WD_ALIGN_PARAGRAPH.CENTER,
+                'left': WD_ALIGN_PARAGRAPH.LEFT,
+                'right': WD_ALIGN_PARAGRAPH.RIGHT
+            }.get(align, WD_ALIGN_PARAGRAPH.LEFT)
+        return p
     
     def generate_pdf_report(self, vulnerabilities: List[Dict], source: str, 
                           is_github: bool, filename: str = "report.pdf") -> str:
-        """Генерирует PDF отчет"""
-        self.pdf.add_page()
-        self.pdf.set_font("Helvetica", "B", 20)
-        self.pdf.cell(0, 10, "WebGuardAI - Отчет о безопасности", ln=True, align="C")
+        """Генерирует PDF отчет через DOCX + конвертацию"""
+        from docx import Document
+        from docx.shared import Pt, RGBColor, Inches
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.oxml.ns import qn
+        from docx2pdf import convert
         
-        self.pdf.set_font("Helvetica", "", 10)
-        self.pdf.cell(0, 5, f"Дата: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ln=True, align="C")
-        self.pdf.cell(0, 5, f"Источник: {source}", ln=True, align="C")
-        self.pdf.cell(0, 5, f"Тип: {'GitHub репозиторий' if is_github else 'Локальная папка'}", ln=True, align="C")
+        doc = Document()
         
-        self.pdf.set_font("Helvetica", "B", 14)
-        self.pdf.ln(10)
-        self.pdf.cell(0, 10, "Итоги", ln=True)
+        # Настройка стилей для кириллицы
+        style = doc.styles['Normal']
+        style.font.name = 'Arial'
+        style._element.rPr.rFonts.set(qn('w:eastAsia'), 'Arial')
         
-        self.pdf.set_font("Helvetica", "", 11)
+        # Заголовок
+        title = doc.add_heading('🛡️ WebGuardAI - Отчет о безопасности', level=1)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        title.runs[0].font.color.rgb = RGBColor(44, 62, 80)
+        title.runs[0].font.bold = True
+        
+        # Мета-информация
+        doc.add_paragraph('')  # отступ
+        meta = doc.add_paragraph()
+        meta.add_run(f'📅 Дата: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}\n')
+        meta.add_run(f'📁 Источник: {source}\n')
+        meta.add_run(f'🔗 Тип: {"GitHub репозиторий" if is_github else "Локальная папка"}')
+        
+        # Блок с итогами
+        doc.add_heading('📊 Итоги', level=2)
         high = sum(1 for v in vulnerabilities if "high" in v.get('severity', '').lower())
         medium = sum(1 for v in vulnerabilities if "medium" in v.get('severity', '').lower())
         low = sum(1 for v in vulnerabilities if "low" in v.get('severity', '').lower())
         
-        self.pdf.cell(0, 6, f"Всего уязвимостей: {len(vulnerabilities)}", ln=True)
-        self.pdf.cell(0, 6, f"Критичные: {high}", ln=True)
-        self.pdf.cell(0, 6, f"Средние: {medium}", ln=True)
-        self.pdf.cell(0, 6, f"Низкие: {low}", ln=True)
+        summary_table = doc.add_table(rows=4, cols=2)
+        summary_table.style = 'Light Grid Accent 1'
+        summary_data = [
+            ('Всего уязвимостей:', str(len(vulnerabilities))),
+            ('🔴 Критичные (High):', str(high)),
+            ('🟡 Средние (Medium):', str(medium)),
+            ('🟢 Низкие (Low):', str(low)),
+        ]
+        for i, (label, value) in enumerate(summary_data):
+            summary_table.cell(i, 0).text = label
+            summary_table.cell(i, 1).text = value
+            # Подсветка критичных
+            if "High" in label and high > 0:
+                summary_table.cell(i, 1).paragraphs[0].runs[0].font.color.rgb = RGBColor(255, 0, 0)
+                summary_table.cell(i, 1).paragraphs[0].runs[0].font.bold = True
         
-        self.pdf.set_font("Helvetica", "B", 14)
-        self.pdf.ln(10)
-        self.pdf.cell(0, 10, "Детальные результаты", ln=True)
+        # Детальные результаты
+        doc.add_heading('🔍 Детальные результаты', level=2)
         
-        self.pdf.set_font("Helvetica", "", 10)
+        if vulnerabilities:
+            for i, vuln in enumerate(vulnerabilities, 1):
+                # Заголовок уязвимости
+                severity = vuln.get('severity', 'Unknown').upper()
+                sev_color = {'HIGH': 'FF0000', 'MEDIUM': 'FFAA00', 'LOW': '00AA00'}.get(severity, '666666')
+                
+                p = doc.add_paragraph()
+                run = p.add_run(f'{i}. [{severity}] {vuln.get("type", "Unknown")}')
+                run.bold = True
+                run.font.color.rgb = RGBColor.from_string(sev_color)
+                run.font.size = Pt(11)
+                
+                # Информация
+                doc.add_paragraph(f'📄 Файл: {vuln.get("file", "N/A")}', style='List Bullet')
+                
+                # Описание
+                p_desc = doc.add_paragraph('📝 Описание: ', style='List Bullet')
+                p_desc.add_run(vuln.get('description', 'N/A')).italic = True
+                
+                # Рекомендация
+                p_rec = doc.add_paragraph('💡 Рекомендация: ', style='List Bullet')
+                p_rec.add_run(vuln.get('recommendation', 'N/A'))
+                
+                doc.add_paragraph('─' * 60)  # разделитель
+        else:
+            doc.add_paragraph('✅ Уязвимостей не обнаружено.', style='Intense Quote')
         
-        for i, vuln in enumerate(vulnerabilities, 1):
-            self.pdf.set_font("Helvetica", "B", 11)
-            severity = vuln.get('severity', 'Unknown').upper()
-            self.pdf.cell(0, 8, f"{i}. [{severity}] {vuln.get('type', 'Unknown')}", ln=True)
-            
-            self.pdf.set_font("Helvetica", "", 10)
-            self.pdf.cell(0, 5, f"Файл: {vuln.get('file', 'N/A')}", ln=True)
-            self.pdf.multi_cell(0, 5, f"Описание: {vuln.get('description', 'N/A')}")
-            self.pdf.multi_cell(0, 5, f"Рекомендация: {vuln.get('recommendation', 'N/A')}")
-            self.pdf.ln(3)
+        # Футер
+        doc.add_paragraph('')
+        footer = doc.add_paragraph('Отчет создан WebGuardAI - Advanced Code Security Scanner')
+        footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        footer.italic = True
+        footer.runs[0].font.size = Pt(9)
+        footer.runs[0].font.color.rgb = RGBColor(100, 100, 100)
         
-        self.pdf.set_font("Helvetica", "I", 9)
-        self.pdf.ln(10)
-        self.pdf.cell(0, 5, "Отчет создан WebGuardAI - Advanced Code Security Scanner", align="C", ln=True)
+        # Сохраняем временный DOCX
+        temp_docx = filename.replace('.pdf', '.docx') if filename.endswith('.pdf') else filename + '.docx'
+        doc.save(temp_docx)
         
-        self.pdf.output(filename)
+        # Конвертируем в PDF
+        try:
+            convert(temp_docx, filename)
+            # Удаляем временный DOCX
+            if os.path.exists(temp_docx):
+                os.remove(temp_docx)
+        except Exception as e:
+            print(f"{Fore.YELLOW}[!] Не удалось конвертировать в PDF: {e}")
+            print(f"{Fore.YELLOW}[!] Отчет сохранен в формате DOCX: {temp_docx}")
+            return temp_docx
+        
         return filename
     
     def generate_txt_report(self, vulnerabilities: List[Dict], source: str, 
@@ -289,7 +399,7 @@ class MailSender:
     """Отправитель отчетов по почте"""
     
     def __init__(self, smtp_server: str, smtp_port: int, 
-                 sender_email: Optional[str] = None, sender_password: Optional[str] = None):
+                 sender_email = "", sender_password = ""):
         self.smtp_server = smtp_server
         self.smtp_port = smtp_port
         self.sender_email = sender_email
@@ -375,7 +485,7 @@ WebGuardAI - Отчет о сканировании безопасности
             
             encoders.encode_base64(part)
             filename = os.path.basename(file_path)
-            part.add_header("Content-Disposition", f"attachment; filename= {filename}")
+            part.add_header("Content-Disposition", f'attachment; filename="{filename}"')
             message.attach(part)
         except Exception as e:
             print(f"Ошибка при прикреплении файла: {str(e)}")
@@ -930,8 +1040,8 @@ def main():
     
     email_group = parser.add_argument_group('Опции почты')
     email_group.add_argument("--email", metavar="RECIPIENT", help="Отправить отчет на адрес электронной почты")
-    email_group.add_argument("--smtp-server", default="smtp.gmail.com", help="SMTP сервер (по умолчанию: smtp.gmail.com)")
-    email_group.add_argument("--smtp-port", type=int, default=587, help="Порт SMTP (по умолчанию: 587)")
+    email_group.add_argument("--smtp-server", default="smtp.hoster.by", help="SMTP сервер")
+    email_group.add_argument("--smtp-port", type=int, default=465, help="Порт SMTP")
     email_group.add_argument("--sender-email", help="Email отправителя (опционально)")
     email_group.add_argument("--sender-password", help="Пароль email отправителя (опционально)")
     
